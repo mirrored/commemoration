@@ -2,11 +2,19 @@ import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import {
+  fetchCurrentUser,
+  getStoredSession,
+  login,
+  logout,
+  AuthError
+} from './auth'
+import { getGraveHuman, listGraveHumans } from './grave-human'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
+    width: 1280,
+    height: 800,
     show: false,
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
@@ -32,6 +40,61 @@ function createWindow(): void {
   }
 }
 
+function registerIpcHandlers(): void {
+  ipcMain.handle('auth:login', async (_event, username: string, password: string) => {
+    try {
+      const session = await login(username, password)
+      return { ok: true as const, session }
+    } catch (error) {
+      const message = error instanceof AuthError ? error.message : 'Login failed'
+      return { ok: false as const, error: message }
+    }
+  })
+
+  ipcMain.handle('auth:logout', async () => {
+    logout()
+    return { ok: true as const }
+  })
+
+  ipcMain.handle('auth:getSession', async () => {
+    const session = getStoredSession()
+    if (!session) {
+      return { ok: true as const, session: null }
+    }
+
+    try {
+      const user = await fetchCurrentUser()
+      return {
+        ok: true as const,
+        session: { ...session, user }
+      }
+    } catch {
+      logout()
+      return { ok: true as const, session: null }
+    }
+  })
+
+  ipcMain.handle('grave-human:list', async () => {
+    try {
+      const data = await listGraveHumans()
+      return { ok: true as const, data }
+    } catch (error) {
+      const message = error instanceof AuthError ? error.message : 'Failed to load records'
+      return { ok: false as const, error: message }
+    }
+  })
+
+  ipcMain.handle('grave-human:get', async (_event, id: number) => {
+    try {
+      const data = await getGraveHuman(id)
+      return { ok: true as const, data }
+    } catch (error) {
+      const message = error instanceof AuthError ? error.message : 'Failed to load record'
+      return { ok: false as const, error: message }
+    }
+  })
+}
+
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.commemorate')
 
@@ -39,8 +102,7 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  ipcMain.on('ping', () => console.log('pong'))
-
+  registerIpcHandlers()
   createWindow()
 
   app.on('activate', () => {

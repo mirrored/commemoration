@@ -2,4 +2,4 @@ import './assets/main.css'
 
 import { createApp } from './App'
 
-createApp()
+void createApp()
