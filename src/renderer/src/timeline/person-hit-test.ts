@@ -7,14 +7,6 @@ export interface PersonHitResult {
   human: GraveHumanSummary
 }
 
-/** 是否在当前 thin_rank 上限下应显示且可交互 */
-export function isPersonVisibleAtCap(
-  human: GraveHumanSummary,
-  cap: number
-): boolean {
-  return Boolean(human.death_date) && human.thin_rank <= cap
-}
-
 /**
  * 用屏幕坐标在可见人物头像中做圆形命中（不依赖 G6 pointerEvents）。
  * 优先 thin_rank 较大者，避免被 rank=1 的大拾取区挡住。
@@ -22,15 +14,12 @@ export function isPersonVisibleAtCap(
 export function hitTestPersonAtClient(
   graph: Graph,
   humans: GraveHumanSummary[],
-  cap: number,
   clientX: number,
   clientY: number
 ): PersonHitResult | null {
   const [canvasX, canvasY] = graph.getCanvasByClient([clientX, clientY])
 
-  const candidates = humans
-    .filter((h) => isPersonVisibleAtCap(h, cap))
-    .sort((a, b) => b.thin_rank - a.thin_rank)
+  const candidates = [...humans].sort((a, b) => b.thin_rank - a.thin_rank)
 
   let best: (PersonHitResult & { dist: number }) | null = null
 

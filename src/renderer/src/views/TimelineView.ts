@@ -18,6 +18,7 @@ import {
   getDeathYearSpan,
   maxVisibleThinRankFromZoom
 } from '../timeline/thin-rank'
+import { visibleHumansAtCap } from '../timeline/visible-humans'
 
 function escapeHtml(value: string): string {
   return value
@@ -136,6 +137,9 @@ export async function mountTimelineView(
   let chartPointerMove: ((e: MouseEvent) => void) | null = null
   let chartPointerLeave: (() => void) | null = null
   let chartClick: ((e: MouseEvent) => void) | null = null
+  let interactiveHumans: GraveHumanSummary[] = []
+  let tooltipRaf = 0
+  let pendingTooltip: { x: number; y: number } | null = null
 
   const captureBaselineZoom = (): void => {
     if (graph) baselineZoom = Math.max(graph.getZoom(), 0.05)
@@ -257,6 +261,7 @@ export async function mountTimelineView(
   const rebuildTimelineGraph = async (cap: number): Promise<void> => {
     if (!graph || allHumans.length === 0) return
     thinRankCap = cap
+    refreshInteractiveHumans(cap)
     const width = chartEl.clientWidth || 1100
     const height = chartEl.clientHeight || 560
     const graphData = buildTimelineGraph(allHumans, width, height, thinRankCap)
@@ -267,12 +272,18 @@ export async function mountTimelineView(
   }
 
   /** 仅切换 thin_rank 可见性，不重建图，避免视口被 translateTo 甩飞 */
+  const refreshInteractiveHumans = (cap: number): void => {
+    interactiveHumans = visibleHumansAtCap(allHumans, cap)
+  }
+
   const applyThinRankCap = async (cap: number): Promise<void> => {
     if (!graph || allHumans.length === 0 || cap === thinRankCap) return
     isSyncingCap = true
+    const previousCap = thinRankCap
     try {
       thinRankCap = cap
-      await applyThinRankCapToGraph(graph, allHumans, cap)
+      await applyThinRankCapToGraph(graph, allHumans, cap, previousCap)
+      refreshInteractiveHumans(cap)
       applyTimelineScreenSpace(graph)
       updateSubtitle(allHumans, thinRankCap)
     } finally {
@@ -296,10 +307,12 @@ export async function mountTimelineView(
   const renderGraph = (humans: GraveHumanSummary[]): void => {
     destroyGraph()
     allHumans = humans
+    refreshInteractiveHumans(thinRankCap)
 
     const width = chartEl.clientWidth || 1100
     const height = chartEl.clientHeight || 560
     thinRankCap = 1
+    refreshInteractiveHumans(thinRankCap)
     const graphData = buildTimelineGraph(allHumans, width, height, thinRankCap)
 
     if (graphData.nodes.length === 0) {
@@ -316,6 +329,7 @@ export async function mountTimelineView(
       height,
       autoFit: 'view',
       padding: [24, 32, 48, 32],
+      animation: false,
       data: {
         nodes: graphData.nodes,
         edges: graphData.edges
@@ -324,14 +338,13 @@ export async function mountTimelineView(
       node: {
         style: {
           port: false,
-          shadowBlur: 8,
-          shadowColor: 'rgba(0,0,0,0.25)'
+          shadowBlur: 0
         },
         state: {
           active: {
             stroke: '#fff',
             lineWidth: 3,
-            shadowBlur: 14
+            shadowBlur: 4
           }
         }
       },
@@ -345,9 +358,12 @@ export async function mountTimelineView(
       behaviors: ['drag-canvas', 'zoom-canvas']
     })
 
-    const updateTooltipFromPointer = (clientX: number, clientY: number): void => {
-      if (!graph) return
-      const hit = hitTestPersonAtClient(graph, allHumans, thinRankCap, clientX, clientY)
+    const flushTooltip = (): void => {
+      tooltipRaf = 0
+      if (!graph || !pendingTooltip) return
+      const { x, y } = pendingTooltip
+      pendingTooltip = null
+      const hit = hitTestPersonAtClient(graph, interactiveHumans, x, y)
       if (!hit) {
         personTooltip.hide()
         return
@@ -357,11 +373,17 @@ export async function mountTimelineView(
       personTooltip.showAtClient(personTooltipText(hit.human), anchorX, anchorY)
     }
 
-    chartPointerMove = (e: MouseEvent) => updateTooltipFromPointer(e.clientX, e.clientY)
+    const scheduleTooltip = (clientX: number, clientY: number): void => {
+      pendingTooltip = { x: clientX, y: clientY }
+      if (tooltipRaf) return
+      tooltipRaf = requestAnimationFrame(flushTooltip)
+    }
+
+    chartPointerMove = (e: MouseEvent) => scheduleTooltip(e.clientX, e.clientY)
     chartPointerLeave = () => personTooltip.hide()
     chartClick = (e: MouseEvent) => {
       if (!graph) return
-      const hit = hitTestPersonAtClient(graph, allHumans, thinRankCap, e.clientX, e.clientY)
+      const hit = hitTestPersonAtClient(graph, interactiveHumans, e.clientX, e.clientY)
       if (hit) navigate({ name: 'person', id: hit.human.id })
     }
 
@@ -397,6 +419,9 @@ export async function mountTimelineView(
       showStatus(result.error, true)
       return { destroy: destroyGraph, resize: () => undefined }
     }
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    })
     renderGraph(result.data)
   } catch (error) {
     showStatus(error instanceof Error ? error.message : '加载数据失败', true)
@@ -416,6 +441,7 @@ export async function mountTimelineView(
 
   return {
     destroy: () => {
+      if (tooltipRaf) cancelAnimationFrame(tooltipRaf)
       resizeObserver.disconnect()
       destroyGraph()
       personTooltip.destroy()

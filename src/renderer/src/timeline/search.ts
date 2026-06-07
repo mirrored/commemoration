@@ -5,7 +5,9 @@ export type GraveHumanSearchField =
   | 'ethnicity'
   | 'nationality'
   | 'birthplace'
+  | 'occupation'
   | 'notable_works'
+  | 'achievements'
   | 'birth_date'
   | 'death_date'
 
@@ -19,7 +21,9 @@ export const GRAVE_HUMAN_SEARCH_FIELDS: GraveHumanSearchFieldOption[] = [
   { value: 'ethnicity', label: '民族' },
   { value: 'nationality', label: '国籍' },
   { value: 'birthplace', label: '出生地' },
+  { value: 'occupation', label: '职业' },
   { value: 'notable_works', label: '作品' },
+  { value: 'achievements', label: '成就' },
   { value: 'birth_date', label: '出生年份' },
   { value: 'death_date', label: '去世年份' }
 ]
@@ -30,6 +34,13 @@ function normalizeQuery(query: string): string {
 
 function textHaystack(value: string | null | undefined): string {
   return (value ?? '').toLowerCase()
+}
+
+function listTextHaystack(value: string | null | undefined): string {
+  return (value ?? '')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
 }
 
 function yearHaystack(date: string | null | undefined): string {
@@ -48,8 +59,12 @@ function fieldHaystack(human: GraveHumanSummary, field: GraveHumanSearchField): 
       return textHaystack(human.nationality)
     case 'birthplace':
       return textHaystack(human.birthplace)
+    case 'occupation':
+      return textHaystack(human.occupation)
     case 'notable_works':
-      return textHaystack(human.notable_works)
+      return listTextHaystack(human.notable_works)
+    case 'achievements':
+      return listTextHaystack(human.achievements)
     case 'birth_date':
       return yearHaystack(human.birth_date)
     case 'death_date':

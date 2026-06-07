@@ -4,6 +4,10 @@ const LIST_PREFIX = /^\s*(?:[-*+]\s+|\d+\.\s+)/
 const YEAR_PREFIX = /^\s*(\d{4})\s*(?:[·•.\-—]\s*)/
 const YEAR_ONLY = /^\d{4}年?$/
 const YEAR_RUN = /\d{4}年(?:[、，]\d{4}年)+/
+/** 第3、5届 — 多届次枚举，顿号不拆 */
+const SESSION_ENUM = /第[\d一二三四五六七八九十百]+(?:、[\d一二三四五六七八九十百]+)+届/
+const SESSION_FRAGMENT = /^[\d一二三四五六七八九十百]+届/
+const SESSION_HEAD_FRAGMENT = /第[\d一二三四五六七八九十百]+$/
 const BOOK_LINE = /^《[^》]+》）?$/
 const OPEN_PAREN_TAIL = /（[^）]*$/
 const YEAR_IN_PAREN_TAIL = /（\d{4}年?$/
@@ -33,21 +37,44 @@ function normalizeItem(line: string): string {
   return t
 }
 
-function protectYearRuns(text: string): { text: string; tokens: string[] } {
+function protectTokens(
+  text: string,
+  pattern: RegExp,
+  prefix: string
+): { text: string; tokens: string[] } {
   const tokens: string[] = []
-  const protectedText = text.replace(YEAR_RUN, (match) => {
+  const protectedText = text.replace(pattern, (match) => {
     tokens.push(match)
-    return `\x00YR${tokens.length - 1}\x00`
+    return `\x00${prefix}${tokens.length - 1}\x00`
   })
   return { text: protectedText, tokens }
 }
 
-function unprotectYearRuns(text: string, tokens: string[]): string {
+function unprotectTokens(text: string, tokens: string[], prefix: string): string {
   let out = text
   for (let i = 0; i < tokens.length; i++) {
-    out = out.replace(`\x00YR${i}\x00`, tokens[i])
+    out = out.replace(`\x00${prefix}${i}\x00`, tokens[i])
   }
   return out
+}
+
+function protectAchievementText(text: string): { text: string; yearTokens: string[]; sessionTokens: string[] } {
+  const year = protectTokens(text, YEAR_RUN, 'YR')
+  const session = protectTokens(year.text, SESSION_ENUM, 'SE')
+  return { text: session.text, yearTokens: year.tokens, sessionTokens: session.tokens }
+}
+
+function unprotectAchievementText(
+  text: string,
+  yearTokens: string[],
+  sessionTokens: string[]
+): string {
+  return unprotectTokens(unprotectTokens(text, sessionTokens, 'SE'), yearTokens, 'YR')
+}
+
+function isFormattedList(text: string): boolean {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  return lines.length > 0 && lines.every((l) => LIST_PREFIX.test(l))
 }
 
 function splitOutsideBrackets(text: string, separators: string): string[] {
@@ -97,6 +124,7 @@ function joinMerged(prev: string, curr: string): string {
     return prev + sep + curr
   }
   if (/\d{4}年$/.test(prev) && /^\d{4}年/.test(curr)) return `${prev}、${curr}`
+  if (SESSION_HEAD_FRAGMENT.test(prev) && SESSION_FRAGMENT.test(curr)) return `${prev}、${curr}`
   return `${prev} ${curr}`
 }
 
@@ -114,6 +142,7 @@ function shouldMergeWithPrevious(prev: string, curr: string): boolean {
   }
   if (CONTINUATION.test(curr) && /(设立|成立|创立|创办|奖)/.test(prev)) return true
   if (/\d{4}年$/.test(prev) && /^\d{4}年/.test(curr)) return true
+  if (SESSION_HEAD_FRAGMENT.test(prev) && SESSION_FRAGMENT.test(curr)) return true
   if (/[（年]$/.test(prev) && BOOK_LINE.test(curr)) return true
   return false
 }
@@ -140,7 +169,12 @@ function splitIntoItems(text: string): string[] {
     return [normalizeItem(trimmed)]
   }
 
-  const { text: protectedText, tokens } = protectYearRuns(trimmed)
+  if (isFormattedList(trimmed)) {
+    const lines = trimmed.split(/\r?\n/).map((l) => normalizeItem(l.trim())).filter(Boolean)
+    return mergeFragments(lines)
+  }
+
+  const { text: protectedText, yearTokens, sessionTokens } = protectAchievementText(trimmed)
   const chunks: string[] = []
 
   if (protectedText.includes('\n')) {
@@ -155,7 +189,7 @@ function splitIntoItems(text: string): string[] {
   }
 
   const items = chunks
-    .map((c) => unprotectYearRuns(normalizeItem(c), tokens))
+    .map((c) => unprotectAchievementText(normalizeItem(c), yearTokens, sessionTokens))
     .filter(Boolean)
   return mergeFragments(items)
 }

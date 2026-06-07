@@ -1,5 +1,4 @@
 import type { GraveHumanSummary } from '../../../shared/grave-human'
-import { avatarSrcForTimeline } from './avatar'
 import { genderBranchColors } from './colors'
 
 export type TimelineNodeType =
@@ -18,14 +17,19 @@ const TRUNK_EXTEND_PX = 72
 /** 逻辑尺寸（zoom=1）；实际渲染由 screen-space 按 1/zoom 补偿为屏幕恒定 */
 export const TIMELINE_TRUNK_LINE_WIDTH = 16
 export const TIMELINE_BRANCH_LINE_WIDTH = 2.5
-export const TIMELINE_YEAR_DIVIDER_LINE_WIDTH = 2.5
+export const TIMELINE_YEAR_DIVIDER_LINE_WIDTH = 3.5
 export const TIMELINE_FORK_SIZE = 12
 export const TIMELINE_FORK_LINE_WIDTH = 2
 export const TIMELINE_PORTRAIT_SIZE = 48
 export const TIMELINE_PORTRAIT_LINE_WIDTH = 2
 export const TIMELINE_LABEL_FONT_SIZE = 11
 export const TIMELINE_LABEL_OFFSET_Y = 6
-export const TIMELINE_YEAR_LABEL_FONT_SIZE = 11
+export const TIMELINE_YEAR_LABEL_FONT_SIZE = 12
+
+/** 人物圆心与干线之间的额外净距（不含圆半径、分叉点） */
+const BRANCH_TRUNK_GAP = 18
+/** 年份分界线超出最外圈人物/标签的延伸量 */
+const YEAR_DIVIDER_EXTEND = 56
 
 export interface TimelineGraphNode {
   id: string
@@ -174,7 +178,17 @@ export function buildTimelineGraph(
 ): TimelineGraphData {
   const paddingX = 96
   const paddingY = 72
-  const branchLength = Math.min(110, Math.max(72, (canvasHeight - paddingY * 2) / 2 - 24))
+  const personRadius = TIMELINE_PORTRAIT_SIZE / 2
+  const forkRadius = TIMELINE_FORK_SIZE / 2
+  const trunkHalf = TIMELINE_TRUNK_LINE_WIDTH / 2
+  const labelRoom = TIMELINE_LABEL_FONT_SIZE + TIMELINE_LABEL_OFFSET_Y + 14
+  const minBranchLength =
+    personRadius + forkRadius + trunkHalf + BRANCH_TRUNK_GAP
+  const maxBranchLength = Math.max(
+    minBranchLength,
+    (canvasHeight - paddingY * 2) / 2 - personRadius - labelRoom
+  )
+  const branchLength = Math.min(160, Math.max(minBranchLength, maxBranchLength))
   const usableWidth = Math.max(320, canvasWidth - paddingX * 2)
   const centerY = canvasHeight / 2
   const forkMinX = paddingX
@@ -264,16 +278,10 @@ export function buildTimelineGraph(
       }
     })
 
-    const portraitSrc = avatarSrcForTimeline(
-      human.name,
-      human.gender,
-      human.avatar,
-      TIMELINE_PORTRAIT_SIZE
-    )
+    const initial = (human.name.trim().slice(0, 1) || '?').replace(/[<>&"']/g, '')
 
     nodes.push({
       id: leafId,
-      type: 'image',
       data: {
         nodeType: 'person',
         humanId: human.id,
@@ -286,8 +294,8 @@ export function buildTimelineGraph(
       style: {
         x,
         y: branchY,
-        src: portraitSrc,
         size: TIMELINE_PORTRAIT_SIZE,
+        fill: colors.fill,
         stroke: colors.stroke,
         lineWidth: TIMELINE_PORTRAIT_LINE_WIDTH,
         opacity: 1,
@@ -295,7 +303,13 @@ export function buildTimelineGraph(
         zIndex: human.thin_rank,
         pointerEvents: showPerson ? 'auto' : 'none',
         cursor: showPerson ? 'pointer' : 'default',
-        labelText: human.name,
+        icon: showPerson,
+        iconText: showPerson ? initial : '',
+        iconFill: '#ffffff',
+        iconFontSize: Math.round(TIMELINE_PORTRAIT_SIZE * 0.42),
+        iconFontWeight: 600,
+        label: showPerson,
+        labelText: showPerson ? human.name : '',
         labelFill: '#f4f6fa',
         labelFontSize: TIMELINE_LABEL_FONT_SIZE,
         labelFontWeight: 600,
@@ -354,8 +368,9 @@ export function buildTimelineGraph(
     }
   })
 
-  const dividerTopY = centerY - branchLength - 32
-  const dividerBottomY = centerY + branchLength + 48
+  const branchOuterY = branchLength + personRadius + labelRoom
+  const dividerTopY = centerY - branchOuterY - YEAR_DIVIDER_EXTEND
+  const dividerBottomY = centerY + branchOuterY + YEAR_DIVIDER_EXTEND
   const yearBoundaries = collectYearBoundaryPositions(valid, forkXs)
 
   for (const { year, x } of yearBoundaries) {
@@ -379,17 +394,19 @@ export function buildTimelineGraph(
       data: { nodeType: 'axis', yearLabel: `${year}` },
       style: {
         x,
-        y: dividerTopY - 14,
+        y: dividerTopY - 18,
         size: 0,
         labelText: `${year}`,
-        labelFill: 'rgba(220, 228, 240, 0.95)',
+        labelFill: '#eef2f8',
         labelFontSize: TIMELINE_YEAR_LABEL_FONT_SIZE,
         labelFontWeight: 700,
         labelPlacement: 'center',
         labelBackground: true,
-        labelBackgroundFill: 'rgba(30, 38, 52, 0.85)',
-        labelBackgroundRadius: 4,
-        labelPadding: [2, 6],
+        labelBackgroundFill: 'rgba(36, 48, 72, 0.92)',
+        labelBackgroundStroke: 'rgba(180, 198, 235, 0.45)',
+        labelBackgroundLineWidth: 1,
+        labelBackgroundRadius: 6,
+        labelPadding: [3, 8],
         pointerEvents: 'none' as const
       }
     })
@@ -400,10 +417,12 @@ export function buildTimelineGraph(
       target: bottomId,
       data: { edgeType: 'year-divider' },
       style: {
-        stroke: 'rgba(200, 212, 235, 0.55)',
+        stroke: 'rgba(186, 204, 238, 0.88)',
         lineWidth: TIMELINE_YEAR_DIVIDER_LINE_WIDTH,
-        lineDash: [6, 5],
-        opacity: 1
+        lineDash: [10, 7],
+        opacity: 1,
+        shadowColor: 'rgba(140, 170, 220, 0.35)',
+        shadowBlur: 6
       }
     })
   }

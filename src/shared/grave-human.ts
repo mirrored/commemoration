@@ -7,7 +7,9 @@ export interface GraveHumanSummary {
   ethnicity: string | null
   nationality: string | null
   birthplace: string | null
+  occupation: string | null
   notable_works: string | null
+  achievements: string | null
   thin_rank: number
   avatar: string | null
 }
