@@ -1,4 +1,5 @@
 import type { GraveHumanDetail } from '../../../shared/grave-human'
+import { computeAgeAtDeath } from '../../../shared/age-at-death'
 import { navigate } from '../router'
 import {
   createInitialsAvatarDataUrl,
@@ -38,6 +39,15 @@ function optionalField(label: string, value: string | null | undefined): string 
 function metaLine(label: string, value: string | null | undefined): string {
   if (!hasText(value)) return ''
   return `<p><strong>${escapeHtml(label)}</strong>${escapeHtml(value!.trim())}</p>`
+}
+
+function metaAgeLine(
+  birthDate: string | null | undefined,
+  deathDate: string | null | undefined
+): string {
+  const age = computeAgeAtDeath(birthDate, deathDate)
+  if (age == null) return ''
+  return metaLine('终年', `${age}岁`)
 }
 
 function renderAvatar(person: GraveHumanDetail): string {
@@ -84,6 +94,7 @@ function renderDetail(person: GraveHumanDetail): string {
       <div class="person-hero">
         ${renderAvatar(person)}
         <div class="person-hero__meta">
+          ${metaAgeLine(person.birth_date, person.death_date)}
           ${metaLine('职业', person.occupation)}
           ${metaLine('民族', person.ethnicity)}
           ${metaLine('出生地', person.birthplace)}

@@ -1,5 +1,6 @@
 import { Graph, GraphEvent } from '@antv/g6'
 import type { GraveHumanSummary } from '../../../shared/grave-human'
+import { formatAgeAtDeath } from '../../../shared/age-at-death'
 import { formatGenderLabel } from '../../../shared/gender-label'
 import { navigate } from '../router'
 import { buildTimelineGraph } from '../timeline/buildGraph'
@@ -18,6 +19,12 @@ import {
   getDeathYearSpan,
   maxVisibleThinRankFromZoom
 } from '../timeline/thin-rank'
+import {
+  SEARCH_SORT_COLUMNS,
+  sortSearchResults,
+  type SearchResultSortKey,
+  type SortDirection
+} from '../timeline/search-sort'
 import { visibleHumansAtCap } from '../timeline/visible-humans'
 
 function escapeHtml(value: string): string {
@@ -77,8 +84,15 @@ export function renderTimelineShell(): string {
                 <th scope="col">序号</th>
                 <th scope="col">姓名</th>
                 <th scope="col">性别</th>
-                <th scope="col">出生日期</th>
-                <th scope="col">去世日期</th>
+                ${SEARCH_SORT_COLUMNS.map(
+                  ({ key, label }) => `
+                <th scope="col" aria-sort="none">
+                  <button type="button" class="timeline-search-sort" data-sort="${key}">
+                    ${escapeHtml(label)}
+                    <span class="timeline-search-sort__icon" aria-hidden="true"></span>
+                  </button>
+                </th>`
+                ).join('')}
               </tr>
             </thead>
             <tbody id="search-results-body"></tbody>
@@ -106,6 +120,9 @@ export async function mountTimelineView(
   const searchResultsEl = root.querySelector<HTMLDivElement>('#search-results')
   const searchSummaryEl = root.querySelector<HTMLParagraphElement>('#search-results-summary')
   const searchBodyEl = root.querySelector<HTMLTableSectionElement>('#search-results-body')
+  const searchHeadEl = root.querySelector<HTMLTableSectionElement>(
+    '.timeline-search-table thead'
+  )
   if (
     !chartEl ||
     !statusEl ||
@@ -116,7 +133,8 @@ export async function mountTimelineView(
     !searchClearBtn ||
     !searchResultsEl ||
     !searchSummaryEl ||
-    !searchBodyEl
+    !searchBodyEl ||
+    !searchHeadEl
   ) {
     return { destroy: () => undefined, resize: () => undefined }
   }
@@ -140,6 +158,9 @@ export async function mountTimelineView(
   let interactiveHumans: GraveHumanSummary[] = []
   let tooltipRaf = 0
   let pendingTooltip: { x: number; y: number } | null = null
+  let searchMatches: GraveHumanSummary[] = []
+  let searchSortKey: SearchResultSortKey | null = null
+  let searchSortDir: SortDirection = 'asc'
 
   const captureBaselineZoom = (): void => {
     if (graph) baselineZoom = Math.max(graph.getZoom(), 0.05)
@@ -148,17 +169,35 @@ export async function mountTimelineView(
   const capFromCurrentZoom = (): number =>
     maxVisibleThinRankFromZoom(graph?.getZoom() ?? baselineZoom, baselineZoom)
 
-  const renderSearchResults = (matches: GraveHumanSummary[]): void => {
-    if (matches.length === 0) {
+  const updateSearchSortHeaders = (): void => {
+    for (const th of searchHeadEl.querySelectorAll<HTMLTableCellElement>('th[aria-sort]')) {
+      const btn = th.querySelector<HTMLButtonElement>('.timeline-search-sort')
+      const key = btn?.dataset.sort as SearchResultSortKey | undefined
+      const active = key != null && key === searchSortKey
+      th.setAttribute('aria-sort', active ? (searchSortDir === 'asc' ? 'ascending' : 'descending') : 'none')
+      btn?.classList.toggle('timeline-search-sort--active', active)
+      btn?.classList.toggle('timeline-search-sort--asc', active && searchSortDir === 'asc')
+      btn?.classList.toggle('timeline-search-sort--desc', active && searchSortDir === 'desc')
+    }
+  }
+
+  const renderSearchResults = (): void => {
+    if (searchMatches.length === 0) {
       searchResultsEl.hidden = false
       searchSummaryEl.textContent = '未找到匹配记录'
       searchBodyEl.innerHTML = ''
       searchClearBtn.hidden = false
+      updateSearchSortHeaders()
       return
     }
 
-    searchSummaryEl.textContent = `共 ${matches.length} 条结果`
-    searchBodyEl.innerHTML = matches
+    const rows =
+      searchSortKey == null
+        ? searchMatches
+        : sortSearchResults(searchMatches, searchSortKey, searchSortDir)
+
+    searchSummaryEl.textContent = `共 ${rows.length} 条结果`
+    searchBodyEl.innerHTML = rows
       .map(
         (human, index) => `
         <tr data-human-id="${human.id}" tabindex="0" role="button">
@@ -167,27 +206,44 @@ export async function mountTimelineView(
           <td>${escapeHtml(formatGenderLabel(human.gender))}</td>
           <td>${escapeHtml(formatSearchDate(human.birth_date))}</td>
           <td>${escapeHtml(formatSearchDate(human.death_date))}</td>
+          <td>${escapeHtml(formatAgeAtDeath(human.birth_date, human.death_date))}</td>
         </tr>
       `
       )
       .join('')
     searchResultsEl.hidden = false
     searchClearBtn.hidden = false
+    updateSearchSortHeaders()
   }
 
   const runSearch = (): void => {
     const field = searchFieldEl.value as GraveHumanSearchField
     const query = searchQueryEl.value
-    const matches = searchGraveHumans(allHumans, field, query)
-    renderSearchResults(matches)
+    searchMatches = searchGraveHumans(allHumans, field, query)
+    renderSearchResults()
+  }
+
+  const toggleSearchSort = (key: SearchResultSortKey): void => {
+    if (searchMatches.length === 0) return
+    if (searchSortKey === key) {
+      searchSortDir = searchSortDir === 'asc' ? 'desc' : 'asc'
+    } else {
+      searchSortKey = key
+      searchSortDir = 'asc'
+    }
+    renderSearchResults()
   }
 
   const clearSearch = (): void => {
     searchQueryEl.value = ''
+    searchMatches = []
+    searchSortKey = null
+    searchSortDir = 'asc'
     searchResultsEl.hidden = true
     searchBodyEl.innerHTML = ''
     searchSummaryEl.textContent = ''
     searchClearBtn.hidden = true
+    updateSearchSortHeaders()
   }
 
   searchBtn.addEventListener('click', runSearch)
@@ -195,6 +251,12 @@ export async function mountTimelineView(
     if (event.key === 'Enter') runSearch()
   })
   searchClearBtn.addEventListener('click', clearSearch)
+  searchHeadEl.addEventListener('click', (event) => {
+    const btn = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-sort]')
+    if (!btn?.dataset.sort) return
+    event.preventDefault()
+    toggleSearchSort(btn.dataset.sort as SearchResultSortKey)
+  })
   searchBodyEl.addEventListener('click', (event) => {
     const row = (event.target as HTMLElement).closest<HTMLTableRowElement>('tr[data-human-id]')
     if (!row) return
