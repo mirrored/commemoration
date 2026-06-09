@@ -1,5 +1,5 @@
 import type { GraveHumanDetail } from '../../../shared/grave-human'
-import { computeAgeAtDeath } from '../../../shared/age-at-death'
+import { formatAgeAtDeath } from '../../../shared/age-at-death'
 import { navigate } from '../router'
 import {
   createInitialsAvatarDataUrl,
@@ -45,9 +45,9 @@ function metaAgeLine(
   birthDate: string | null | undefined,
   deathDate: string | null | undefined
 ): string {
-  const age = computeAgeAtDeath(birthDate, deathDate)
-  if (age == null) return ''
-  return metaLine('终年', `${age}岁`)
+  const label = formatAgeAtDeath(birthDate, deathDate)
+  if (label === '—') return ''
+  return metaLine('终年', label)
 }
 
 function renderAvatar(person: GraveHumanDetail): string {

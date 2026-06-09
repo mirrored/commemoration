@@ -1,5 +1,6 @@
 import type { GraveHumanSummary } from '../../../shared/grave-human'
 import { computeAgeAtDeath } from '../../../shared/age-at-death'
+import { partialDateToSortTime } from '../../../shared/partial-date'
 
 export type SearchResultSortKey = 'birth_date' | 'death_date' | 'age_at_death'
 export type SortDirection = 'asc' | 'desc'
@@ -11,9 +12,7 @@ export const SEARCH_SORT_COLUMNS: { key: SearchResultSortKey; label: string }[] 
 ]
 
 function dateSortValue(value: string | null | undefined): number | null {
-  if (!value) return null
-  const parsed = Date.parse(`${value.slice(0, 10)}T00:00:00`)
-  return Number.isNaN(parsed) ? null : parsed
+  return partialDateToSortTime(value)
 }
 
 function compareNullable(a: number | null, b: number | null, direction: SortDirection): number {

@@ -1,4 +1,9 @@
 import type { GraveHumanSummary } from '../../../shared/grave-human'
+import {
+  formatPartialDate,
+  formatPartialDateDot,
+  partialDateToSortTime
+} from '../../../shared/partial-date'
 import { genderBranchColors } from './colors'
 
 export type TimelineNodeType =
@@ -72,21 +77,17 @@ export interface TimelineGraphData {
 
 function parseDeathTime(deathDate: string | null): number {
   if (!deathDate) return Number.NaN
-  const value = Date.parse(deathDate.slice(0, 10))
-  return Number.isNaN(value) ? Number.NaN : value
+  const value = partialDateToSortTime(deathDate)
+  return value == null ? Number.NaN : value
 }
 
 function formatDateLabel(value: string | null | undefined): string {
-  if (!value) return '—'
-  return value.slice(0, 10)
+  return formatPartialDate(value)
 }
 
-/** 用于悬停提示：1924.07.02 */
+/** 用于悬停提示：1924.07.02、1930.04、1936 */
 export function formatDateDot(value: string | null | undefined): string {
-  if (!value) return '—'
-  const raw = value.slice(0, 10)
-  if (raw.length < 10) return raw
-  return raw.replaceAll('-', '.')
+  return formatPartialDateDot(value)
 }
 
 export { genderBranchColors } from './colors'

@@ -1,4 +1,5 @@
 import type { GraveHumanSummary } from '../../../shared/grave-human'
+import { formatPartialDate } from '../../../shared/partial-date'
 
 export type GraveHumanSearchField =
   | 'name'
@@ -85,6 +86,5 @@ export function searchGraveHumans(
 }
 
 export function formatSearchDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  return value.slice(0, 10)
+  return formatPartialDate(value)
 }

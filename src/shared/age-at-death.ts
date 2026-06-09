@@ -1,27 +1,57 @@
+import { commonPrecision, parsePartialDate, type PartialDate } from './partial-date'
+
 /** 根据生卒日期计算去世时年龄（足岁）；缺任一日期或无法解析时返回 null */
 export function computeAgeAtDeath(
   birthDate: string | null | undefined,
   deathDate: string | null | undefined
 ): number | null {
-  const birth = birthDate?.slice(0, 10)
-  const death = deathDate?.slice(0, 10)
-  if (!birth || !death || birth.length < 10 || death.length < 10) return null
+  const birth = parsePartialDate(birthDate)
+  const death = parsePartialDate(deathDate)
+  if (!birth || !death || death.year < birth.year) return null
 
-  const born = Date.parse(`${birth}T00:00:00`)
-  const died = Date.parse(`${death}T00:00:00`)
-  if (Number.isNaN(born) || Number.isNaN(died) || died < born) return null
+  const precision = commonPrecision(birth, death)
 
-  let age = Number(death.slice(0, 4)) - Number(birth.slice(0, 4))
-  if (death.slice(5) < birth.slice(5)) age -= 1
+  if (precision === 'year') {
+    return death.year - birth.year
+  }
+
+  if (precision === 'month') {
+    let age = death.year - birth.year
+    const birthMonth = birth.month ?? 1
+    const deathMonth = death.month ?? 12
+    if (deathMonth < birthMonth) age -= 1
+    return age >= 0 ? age : null
+  }
+
+  const birthMonth = birth.month ?? 1
+  const birthDay = birth.day ?? 1
+  const deathMonth = death.month ?? 12
+  const deathDay = death.day ?? 28
+
+  let age = death.year - birth.year
+  const birthKey = `${String(birthMonth).padStart(2, '0')}-${String(birthDay).padStart(2, '0')}`
+  const deathKey = `${String(deathMonth).padStart(2, '0')}-${String(deathDay).padStart(2, '0')}`
+  if (deathKey < birthKey) age -= 1
 
   return age >= 0 ? age : null
 }
 
-/** 详情/列表展示：如「87岁」；无法计算时为「—」 */
+function isApproximateAge(
+  birth: PartialDate | null,
+  death: PartialDate | null
+): boolean {
+  if (!birth || !death) return false
+  return birth.precision === 'year' || death.precision === 'year'
+}
+
+/** 详情/列表展示：如「87岁」；仅年份精度时为「约87岁」 */
 export function formatAgeAtDeath(
   birthDate: string | null | undefined,
   deathDate: string | null | undefined
 ): string {
+  const birth = parsePartialDate(birthDate)
+  const death = parsePartialDate(deathDate)
   const age = computeAgeAtDeath(birthDate, deathDate)
-  return age == null ? '—' : `${age}岁`
+  if (age == null) return '—'
+  return isApproximateAge(birth, death) ? `约${age}岁` : `${age}岁`
 }
