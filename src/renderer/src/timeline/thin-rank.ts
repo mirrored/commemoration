@@ -1,4 +1,5 @@
 import type { GraveHumanSummary } from '../../../shared/grave-human'
+import { parsePartialDate } from '../../../shared/partial-date'
 
 /**
  * 相对全览的缩放倍率阈值。
@@ -37,13 +38,31 @@ export function countVisibleByThinRank(
   return humans.filter((h) => h.thin_rank <= cap).length
 }
 
-export function getDeathYearSpan(humans: GraveHumanSummary[]): number {
-  const years = humans
-    .map((h) => h.death_date?.slice(0, 4))
-    .filter((y): y is string => Boolean(y))
-    .map((y) => Number(y))
-    .filter((y) => !Number.isNaN(y))
+/** 从逝世日期提取年份区间（仅统计有 death_date 的记录） */
+export function getDeathYearRange(
+  humans: GraveHumanSummary[]
+): { minYear: number; maxYear: number } | null {
+  const years: number[] = []
+  for (const human of humans) {
+    if (!human.death_date) continue
+    const parsed = parsePartialDate(human.death_date)
+    if (parsed) years.push(parsed.year)
+  }
+  if (years.length === 0) return null
+  return { minYear: Math.min(...years), maxYear: Math.max(...years) }
+}
 
-  if (years.length === 0) return 0
-  return Math.max(...years) - Math.min(...years)
+/** 副标题展示：2015—2026 年；同年则 2015 年 */
+export function formatDeathYearSpanLabel(humans: GraveHumanSummary[]): string {
+  const range = getDeathYearRange(humans)
+  if (!range) return '—'
+  if (range.minYear === range.maxYear) return `${range.minYear} 年`
+  return `${range.minYear}—${range.maxYear} 年`
+}
+
+/** @deprecated 使用 formatDeathYearSpanLabel；保留以免外部引用 */
+export function getDeathYearSpan(humans: GraveHumanSummary[]): number {
+  const range = getDeathYearRange(humans)
+  if (!range) return 0
+  return Math.max(range.maxYear - range.minYear + 1, 1)
 }

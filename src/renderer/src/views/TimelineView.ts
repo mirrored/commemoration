@@ -16,7 +16,7 @@ import {
 } from '../timeline/search'
 import {
   countVisibleByThinRank,
-  getDeathYearSpan,
+  formatDeathYearSpanLabel,
   maxVisibleThinRankFromZoom
 } from '../timeline/thin-rank'
 import {
@@ -305,11 +305,11 @@ export async function mountTimelineView(
   const updateSubtitle = (humans: GraveHumanSummary[], cap: number): void => {
     const subtitle = root.querySelector<HTMLParagraphElement>('#timeline-subtitle')
     if (!subtitle) return
-    const yearSpan = getDeathYearSpan(humans)
+    const spanLabel = formatDeathYearSpanLabel(humans)
     const visible = countVisibleByThinRank(humans, cap)
     const total = humans.filter((h) => h.death_date).length
     if (visible < total) {
-      subtitle.textContent = `时间跨度 ${yearSpan} 年 · 当前显示（${visible}/${total}）· 放大显示更多 · 点击头像查看详情`
+      subtitle.textContent = `时间跨度 ${spanLabel} · 当前显示（${visible}/${total}）· 放大显示更多 · 点击头像查看详情`
     } else {
       subtitle.textContent = `沿生命干线回望逝者 · 点击头像查看详情`
     }
