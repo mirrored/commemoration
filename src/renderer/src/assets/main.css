@@ -236,6 +236,66 @@ button.secondary:hover:not(:disabled) {
   border-color: transparent;
 }
 
+.timeline-year-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.65rem 1rem;
+  padding: 0.55rem 1.25rem 0.7rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(8, 10, 14, 0.72);
+  flex-shrink: 0;
+}
+
+.timeline-year-filter__head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 12rem;
+}
+
+.timeline-year-filter__hint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #7a8494;
+}
+
+.timeline-year-filter__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.55rem 0.75rem;
+}
+
+.timeline-year-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.timeline-year-field input {
+  width: 7.5rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  font: inherit;
+}
+
+.timeline-year-field input:focus {
+  outline: 2px solid rgba(99, 132, 255, 0.55);
+  border-color: transparent;
+}
+
+.timeline-year-filter__sep {
+  align-self: center;
+  padding-bottom: 0.55rem;
+  color: #8f98a8;
+}
+
 .timeline-search-results {
   flex-shrink: 0;
   max-height: min(38vh, 280px);
@@ -550,12 +610,18 @@ button.secondary:hover:not(:disabled) {
   }
 
   .timeline-toolbar,
+  .timeline-year-filter,
   .timeline-search-results {
     background: rgba(255, 255, 255, 0.95);
     border-color: rgba(15, 23, 42, 0.08);
   }
 
   .timeline-search-select {
+    background: #fff;
+    border-color: rgba(15, 23, 42, 0.12);
+  }
+
+  .timeline-year-field input {
     background: #fff;
     border-color: rgba(15, 23, 42, 0.12);
   }

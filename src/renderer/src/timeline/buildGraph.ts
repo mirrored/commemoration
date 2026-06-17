@@ -5,6 +5,12 @@ import {
   partialDateToSortTime
 } from '../../../shared/partial-date'
 import { genderBranchColors } from './colors'
+import {
+  branchLengthForThinRank,
+  labelFontSizeForPersonSize,
+  personSizeForThinRank,
+  zIndexForThinRank
+} from './thin-rank-layout'
 
 export type TimelineNodeType =
   | 'fork'
@@ -17,9 +23,13 @@ export type TimelineNodeType =
 export type TimelineEdgeType = 'trunk' | 'branch' | 'year-divider'
 
 const MIN_FORK_GAP = 64
+/** 布局内宽上限，避免坐标范围过大 */
+const MAX_LAYOUT_INNER_WIDTH = 12_000
+/** 每年在画布上的目标宽度（逻辑像素） */
+const PIXELS_PER_YEAR = 56
 const TRUNK_EXTEND_PX = 72
 
-/** 逻辑尺寸（zoom=1）；实际渲染由 screen-space 按 1/zoom 补偿为屏幕恒定 */
+/** 逻辑尺寸（zoom=1）；缩放时常量尺寸由 fix-element-size 行为补偿 */
 export const TIMELINE_TRUNK_LINE_WIDTH = 16
 export const TIMELINE_BRANCH_LINE_WIDTH = 2.5
 export const TIMELINE_YEAR_DIVIDER_LINE_WIDTH = 3.5
@@ -61,7 +71,11 @@ export interface TimelineGraphEdge {
 }
 
 export interface TimelineLayout {
+  /** 视口画布宽度（G6 Graph width，始终等于容器宽） */
   width: number
+  viewportWidth: number
+  /** 节点横向布局跨度（可大于视口，靠平移浏览） */
+  contentInnerWidth: number
   height: number
   paddingX: number
   paddingY: number
@@ -175,25 +189,25 @@ export function buildTimelineGraph(
   humans: GraveHumanSummary[],
   canvasWidth: number,
   canvasHeight: number,
-  thinRankCap = 1
+  isPersonVisible: (human: GraveHumanSummary) => boolean
 ): TimelineGraphData {
   const paddingX = 96
   const paddingY = 72
-  const personRadius = TIMELINE_PORTRAIT_SIZE / 2
+  const maxPersonRadius = personSizeForThinRank(1) / 2
   const forkRadius = TIMELINE_FORK_SIZE / 2
   const trunkHalf = TIMELINE_TRUNK_LINE_WIDTH / 2
   const labelRoom = TIMELINE_LABEL_FONT_SIZE + TIMELINE_LABEL_OFFSET_Y + 14
   const minBranchLength =
-    personRadius + forkRadius + trunkHalf + BRANCH_TRUNK_GAP
+    maxPersonRadius + forkRadius + trunkHalf + BRANCH_TRUNK_GAP
   const maxBranchLength = Math.max(
     minBranchLength,
-    (canvasHeight - paddingY * 2) / 2 - personRadius - labelRoom
+    (canvasHeight - paddingY * 2) / 2 - maxPersonRadius - labelRoom
   )
   const branchLength = Math.min(160, Math.max(minBranchLength, maxBranchLength))
-  const usableWidth = Math.max(320, canvasWidth - paddingX * 2)
+  const viewportWidth = canvasWidth
+  const usableWidth = Math.max(320, viewportWidth - paddingX * 2)
   const centerY = canvasHeight / 2
   const forkMinX = paddingX
-  const forkMaxX = paddingX + usableWidth
 
   const valid = humans
     .filter((h) => h.death_date)
@@ -205,21 +219,44 @@ export function buildTimelineGraph(
     return {
       nodes: [],
       edges: [],
-      layout: { width: canvasWidth, height: canvasHeight, paddingX, paddingY, branchLength },
+      layout: {
+        width: viewportWidth,
+        viewportWidth,
+        contentInnerWidth: 0,
+        height: canvasHeight,
+        paddingX,
+        paddingY,
+        branchLength
+      },
       range: { min: 0, max: 1 }
     }
   }
 
+  const minInnerWidth =
+    valid.length > 1 ? (valid.length - 1) * MIN_FORK_GAP : 0
   const min = valid[0].time
   const max = valid[valid.length - 1].time
   const span = Math.max(max - min, 1)
+  const yearMin = new Date(min).getFullYear()
+  const yearMax = new Date(max).getFullYear()
+  const yearCount = Math.max(yearMax - yearMin + 1, 1)
+  const timeBasedWidth = yearCount * PIXELS_PER_YEAR
+  const innerWidth = Math.min(
+    Math.max(usableWidth, timeBasedWidth, minInnerWidth),
+    MAX_LAYOUT_INNER_WIDTH
+  )
+  const forkMaxX = paddingX + innerWidth
 
   const idealXs = valid.map((item) => {
     const ratio = (item.time - min) / span
-    return forkMinX + ratio * usableWidth
+    return forkMinX + ratio * innerWidth
   })
 
-  const forkXs = layoutForkPositions(idealXs, forkMinX, forkMaxX, MIN_FORK_GAP)
+  // 保持逝世时间比例；仅在极端拥挤时做最小间距微调
+  const forkXs =
+    valid.length <= 120
+      ? layoutForkPositions(idealXs, forkMinX, forkMaxX, MIN_FORK_GAP)
+      : idealXs
   const xByHumanId = new Map<number, number>()
   valid.forEach((item, index) => {
     xByHumanId.set(item.human.id, forkXs[index])
@@ -228,7 +265,7 @@ export function buildTimelineGraph(
   const firstForkX = forkXs[0]
   const lastForkX = forkXs[forkXs.length - 1]
   const trunkLeftX = Math.max(paddingX * 0.5, firstForkX - TRUNK_EXTEND_PX)
-  const trunkRightX = Math.min(paddingX + usableWidth + TRUNK_EXTEND_PX * 0.5, lastForkX + TRUNK_EXTEND_PX)
+  const trunkRightX = lastForkX + TRUNK_EXTEND_PX
 
   const nodes: TimelineGraphNode[] = []
   const edges: TimelineGraphEdge[] = []
@@ -252,8 +289,19 @@ export function buildTimelineGraph(
     const forkId = `fork-${human.id}`
     const leafId = `person-${human.id}`
     const colors = genderBranchColors(human.gender)
-    const showPerson = human.thin_rank <= thinRankCap
-    const branchY = centerY + direction * branchLength
+    const showPerson = isPersonVisible(human)
+    const personSize = personSizeForThinRank(human.thin_rank)
+    const personRadius = personSize / 2
+    const rankBranchLength = branchLengthForThinRank(
+      branchLength,
+      human.thin_rank,
+      personRadius,
+      minBranchLength
+    )
+    const branchY = centerY + direction * rankBranchLength
+    const labelFontSize = labelFontSizeForPersonSize(personSize, TIMELINE_PORTRAIT_SIZE)
+    const portraitLineWidth =
+      TIMELINE_PORTRAIT_LINE_WIDTH * (personSize / TIMELINE_PORTRAIT_SIZE)
 
     nodes.push({
       id: forkId,
@@ -295,28 +343,28 @@ export function buildTimelineGraph(
       style: {
         x,
         y: branchY,
-        size: TIMELINE_PORTRAIT_SIZE,
+        size: personSize,
         fill: colors.fill,
         stroke: colors.stroke,
-        lineWidth: TIMELINE_PORTRAIT_LINE_WIDTH,
+        lineWidth: portraitLineWidth,
         opacity: 1,
         visibility: showPerson ? 'visible' : 'hidden',
-        zIndex: human.thin_rank,
+        zIndex: zIndexForThinRank(human.thin_rank),
         pointerEvents: showPerson ? 'auto' : 'none',
         cursor: showPerson ? 'pointer' : 'default',
         icon: showPerson,
         iconText: showPerson ? initial : '',
         iconFill: '#ffffff',
-        iconFontSize: Math.round(TIMELINE_PORTRAIT_SIZE * 0.42),
+        iconFontSize: Math.round(personSize * 0.42),
         iconFontWeight: 600,
         label: showPerson,
         labelText: showPerson ? human.name : '',
         labelFill: '#f4f6fa',
-        labelFontSize: TIMELINE_LABEL_FONT_SIZE,
+        labelFontSize,
         labelFontWeight: 600,
         labelPlacement: 'bottom',
         labelOffsetY: TIMELINE_LABEL_OFFSET_Y,
-        labelMaxWidth: 96,
+        labelMaxWidth: Math.round(96 * (personSize / TIMELINE_PORTRAIT_SIZE)),
         labelWordWrap: true,
         labelBackground: true,
         labelBackgroundFill: 'rgba(15, 23, 42, 0.55)',
@@ -369,7 +417,13 @@ export function buildTimelineGraph(
     }
   })
 
-  const branchOuterY = branchLength + personRadius + labelRoom
+  const rank1Branch = branchLengthForThinRank(
+    branchLength,
+    1,
+    maxPersonRadius,
+    minBranchLength
+  )
+  const branchOuterY = rank1Branch + maxPersonRadius + labelRoom
   const dividerTopY = centerY - branchOuterY - YEAR_DIVIDER_EXTEND
   const dividerBottomY = centerY + branchOuterY + YEAR_DIVIDER_EXTEND
   const yearBoundaries = collectYearBoundaryPositions(valid, forkXs)
@@ -464,7 +518,15 @@ export function buildTimelineGraph(
   return {
     nodes,
     edges,
-    layout: { width: canvasWidth, height: canvasHeight, paddingX, paddingY, branchLength },
+    layout: {
+      width: viewportWidth,
+      viewportWidth,
+      contentInnerWidth: innerWidth,
+      height: canvasHeight,
+      paddingX,
+      paddingY,
+      branchLength
+    },
     range: { min, max }
   }
 }

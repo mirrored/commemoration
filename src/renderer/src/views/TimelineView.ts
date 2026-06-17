@@ -4,10 +4,10 @@ import { formatAgeAtDeath } from '../../../shared/age-at-death'
 import { formatGenderLabel } from '../../../shared/gender-label'
 import { navigate } from '../router'
 import { buildTimelineGraph } from '../timeline/buildGraph'
-import { applyTimelineScreenSpace } from '../timeline/screen-space'
+import { fitTimelineViewport } from '../timeline/screen-space'
 import { hitTestPersonAtClient } from '../timeline/person-hit-test'
 import { createTimelinePersonTooltip, personTooltipText } from '../timeline/person-tooltip'
-import { applyThinRankCapToGraph } from '../timeline/thin-rank-visibility'
+import { applyTimelineVisibilityToGraph, enforceTimelineVisibility } from '../timeline/thin-rank-visibility'
 import {
   GRAVE_HUMAN_SEARCH_FIELDS,
   formatSearchDate,
@@ -15,17 +15,31 @@ import {
   type GraveHumanSearchField
 } from '../timeline/search'
 import {
-  countVisibleByThinRank,
   formatDeathYearSpanLabel,
+  getDeathYearRange,
   maxVisibleThinRankFromZoom
 } from '../timeline/thin-rank'
+import {
+  createInitialVisibilityPolicy,
+  countTimelineVisibleHumans,
+  isTimelinePersonVisible,
+  type TimelineVisibilityPolicy
+} from '../timeline/timeline-visibility'
+import {
+  boundsForVisibility,
+  filterHumansByYearBounds,
+  formatYearBoundsLabel,
+  parseYearInput,
+  resolveYearBounds,
+  type YearBounds
+} from '../timeline/year-range-filter'
 import {
   SEARCH_SORT_COLUMNS,
   sortSearchResults,
   type SearchResultSortKey,
   type SortDirection
 } from '../timeline/search-sort'
-import { visibleHumansAtCap } from '../timeline/visible-humans'
+import { visibleHumansWithPolicy } from '../timeline/visible-humans'
 
 function escapeHtml(value: string): string {
   return value
@@ -73,6 +87,25 @@ export function renderTimelineShell(): string {
         </label>
         <button id="search-button" type="button">搜索</button>
         <button id="search-clear-button" type="button" class="secondary" hidden>清除</button>
+      </div>
+      <div class="timeline-year-filter" aria-label="年代筛选">
+        <div class="timeline-year-filter__head">
+          <span class="timeline-search-field__label">年代筛选</span>
+          <p id="year-filter-hint" class="timeline-year-filter__hint"></p>
+        </div>
+        <div class="timeline-year-filter__row">
+          <label class="timeline-year-field">
+            <span class="timeline-search-field__label">起始年</span>
+            <input id="year-start" type="number" inputmode="numeric" min="1000" max="9999" step="1" placeholder="如 2015" />
+          </label>
+          <span class="timeline-year-filter__sep" aria-hidden="true">—</span>
+          <label class="timeline-year-field">
+            <span class="timeline-search-field__label">终止年</span>
+            <input id="year-end" type="number" inputmode="numeric" min="1000" max="9999" step="1" placeholder="如 2026" />
+          </label>
+          <button id="year-filter-apply" type="button">应用</button>
+          <button id="year-filter-reset" type="button" class="secondary">重置</button>
+        </div>
       </div>
       <div id="timeline-status" class="timeline-status" hidden></div>
       <div id="search-results" class="timeline-search-results" hidden>
@@ -123,6 +156,11 @@ export async function mountTimelineView(
   const searchHeadEl = root.querySelector<HTMLTableSectionElement>(
     '.timeline-search-table thead'
   )
+  const yearStartEl = root.querySelector<HTMLInputElement>('#year-start')
+  const yearEndEl = root.querySelector<HTMLInputElement>('#year-end')
+  const yearApplyBtn = root.querySelector<HTMLButtonElement>('#year-filter-apply')
+  const yearResetBtn = root.querySelector<HTMLButtonElement>('#year-filter-reset')
+  const yearHintEl = root.querySelector<HTMLParagraphElement>('#year-filter-hint')
   if (
     !chartEl ||
     !statusEl ||
@@ -134,7 +172,12 @@ export async function mountTimelineView(
     !searchResultsEl ||
     !searchSummaryEl ||
     !searchBodyEl ||
-    !searchHeadEl
+    !searchHeadEl ||
+    !yearStartEl ||
+    !yearEndEl ||
+    !yearApplyBtn ||
+    !yearResetBtn ||
+    !yearHintEl
   ) {
     return { destroy: () => undefined, resize: () => undefined }
   }
@@ -146,11 +189,19 @@ export async function mountTimelineView(
   })
 
   let graph: Graph | null = null
-  let allHumans: GraveHumanSummary[] = []
+  let rawHumans: GraveHumanSummary[] = []
+  let filteredHumans: GraveHumanSummary[] = []
+  let filterBounds: YearBounds | null = null
+  let visibilityBase: TimelineVisibilityPolicy = {
+    cap: 1,
+    segmentSampleIds: null,
+    useSegmentInitial: false
+  }
   let thinRankCap = 1
   let baselineZoom = 1
   let viewportHandler: (() => void) | null = null
   let isSyncingCap = false
+  let suppressZoomCapSync = false
   let personTooltip = createTimelinePersonTooltip()
   let chartPointerMove: ((e: MouseEvent) => void) | null = null
   let chartPointerLeave: (() => void) | null = null
@@ -164,6 +215,44 @@ export async function mountTimelineView(
 
   const captureBaselineZoom = (): void => {
     if (graph) baselineZoom = Math.max(graph.getZoom(), 0.05)
+  }
+
+  const currentVisibilityPolicy = (): TimelineVisibilityPolicy => ({
+    cap: thinRankCap,
+    segmentSampleIds: visibilityBase.segmentSampleIds,
+    useSegmentInitial: visibilityBase.useSegmentInitial,
+    sampleSeed: visibilityBase.sampleSeed,
+    segmentOverview:
+      visibilityBase.useSegmentInitial &&
+      (!graph || capFromCurrentZoom() <= 1)
+  })
+
+  const previousVisibilityPolicy = (previousCap: number): TimelineVisibilityPolicy => ({
+    cap: previousCap,
+    segmentSampleIds: visibilityBase.segmentSampleIds,
+    useSegmentInitial: visibilityBase.useSegmentInitial,
+    sampleSeed: visibilityBase.sampleSeed,
+    segmentOverview: currentVisibilityPolicy().segmentOverview
+  })
+
+  const isPersonVisible = (human: GraveHumanSummary): boolean =>
+    isTimelinePersonVisible(human, currentVisibilityPolicy())
+
+  const refreshDisplayHumans = (): void => {
+    filteredHumans = filterHumansByYearBounds(rawHumans, filterBounds)
+    const activeBounds = boundsForVisibility(filteredHumans, filterBounds)
+    visibilityBase = createInitialVisibilityPolicy(filteredHumans, activeBounds)
+    thinRankCap = visibilityBase.cap
+  }
+
+  const updateYearFilterHint = (): void => {
+    const dataRange = getDeathYearRange(rawHumans)
+    const dataLabel = dataRange ? formatYearBoundsLabel(dataRange) : '—'
+    if (filterBounds) {
+      yearHintEl.textContent = `当前 ${formatYearBoundsLabel(filterBounds)} · 全部数据 ${dataLabel}`
+    } else {
+      yearHintEl.textContent = `显示全部逝世年份 · 数据范围 ${dataLabel}`
+    }
   }
 
   const capFromCurrentZoom = (): number =>
@@ -219,7 +308,7 @@ export async function mountTimelineView(
   const runSearch = (): void => {
     const field = searchFieldEl.value as GraveHumanSearchField
     const query = searchQueryEl.value
-    searchMatches = searchGraveHumans(allHumans, field, query)
+    searchMatches = searchGraveHumans(filteredHumans, field, query)
     renderSearchResults()
   }
 
@@ -302,16 +391,21 @@ export async function mountTimelineView(
     }
   }
 
-  const updateSubtitle = (humans: GraveHumanSummary[], cap: number): void => {
+  const updateSubtitle = (humans: GraveHumanSummary[]): void => {
     const subtitle = root.querySelector<HTMLParagraphElement>('#timeline-subtitle')
     if (!subtitle) return
     const spanLabel = formatDeathYearSpanLabel(humans)
-    const visible = countVisibleByThinRank(humans, cap)
-    const total = humans.filter((h) => h.death_date).length
+    const policy = currentVisibilityPolicy()
+    const visible = countTimelineVisibleHumans(humans, policy)
+    const total = humans.length
+    if (total === 0) {
+      subtitle.textContent = '所选年代内暂无人物 · 请调整筛选条件'
+      return
+    }
     if (visible < total) {
       subtitle.textContent = `时间跨度 ${spanLabel} · 当前显示（${visible}/${total}）· 放大显示更多 · 点击头像查看详情`
     } else {
-      subtitle.textContent = `沿生命干线回望逝者 · 点击头像查看详情`
+      subtitle.textContent = `时间跨度 ${spanLabel} · 点击头像查看详情`
     }
   }
 
@@ -320,76 +414,108 @@ export async function mountTimelineView(
     graph.setOptions({ autoFit: undefined })
   }
 
-  const rebuildTimelineGraph = async (cap: number): Promise<void> => {
-    if (!graph || allHumans.length === 0) return
-    thinRankCap = cap
-    refreshInteractiveHumans(cap)
-    const width = chartEl.clientWidth || 1100
+  const rebuildTimelineGraph = async (): Promise<void> => {
+    if (!graph || filteredHumans.length === 0) return
+    resetCapAtSegmentOverview()
+    const viewportWidth = chartEl.clientWidth || 1100
     const height = chartEl.clientHeight || 560
-    const graphData = buildTimelineGraph(allHumans, width, height, thinRankCap)
+    const graphData = buildTimelineGraph(filteredHumans, viewportWidth, height, isPersonVisible)
+    graph.resize(viewportWidth, height)
     graph.setData({ nodes: graphData.nodes, edges: graphData.edges })
     await graph.draw()
-    applyTimelineScreenSpace(graph)
-    updateSubtitle(allHumans, thinRankCap)
+    suppressZoomCapSync = true
+    try {
+      await fitTimelineViewport(graph)
+      captureBaselineZoom()
+      resetCapAtSegmentOverview()
+      thinRankCap = visibilityBase.cap
+    } finally {
+      suppressZoomCapSync = false
+    }
+    await enforceTimelineVisibility(graph, filteredHumans, currentVisibilityPolicy())
+    refreshInteractiveHumans()
+    updateSubtitle(filteredHumans)
   }
 
-  /** 仅切换 thin_rank 可见性，不重建图，避免视口被 translateTo 甩飞 */
-  const refreshInteractiveHumans = (cap: number): void => {
-    interactiveHumans = visibleHumansAtCap(allHumans, cap)
+  const refreshInteractiveHumans = (): void => {
+    interactiveHumans = visibleHumansWithPolicy(filteredHumans, currentVisibilityPolicy())
   }
 
-  const applyThinRankCap = async (cap: number): Promise<void> => {
-    if (!graph || allHumans.length === 0 || cap === thinRankCap) return
+  const applyVisibilityPolicy = async (newCap: number): Promise<void> => {
+    if (!graph || filteredHumans.length === 0 || newCap === thinRankCap) return
     isSyncingCap = true
     const previousCap = thinRankCap
     try {
-      thinRankCap = cap
-      await applyThinRankCapToGraph(graph, allHumans, cap, previousCap)
-      refreshInteractiveHumans(cap)
-      applyTimelineScreenSpace(graph)
-      updateSubtitle(allHumans, thinRankCap)
+      thinRankCap = newCap
+      await applyTimelineVisibilityToGraph(
+        graph,
+        filteredHumans,
+        currentVisibilityPolicy(),
+        previousVisibilityPolicy(previousCap)
+      )
+      refreshInteractiveHumans()
+      updateSubtitle(filteredHumans)
     } finally {
       isSyncingCap = false
     }
   }
 
-  const syncViewportVisuals = (): void => {
-    if (!graph) return
-    applyTimelineScreenSpace(graph)
-  }
-
-  const syncCapFromZoom = (): void => {
-    if (!graph || isSyncingCap) return
-    const cap = capFromCurrentZoom()
-    if (cap !== thinRankCap) {
-      void applyThinRankCap(cap)
+  const resetCapAtSegmentOverview = (): void => {
+    if (!visibilityBase.useSegmentInitial) return
+    if (capFromCurrentZoom() <= 1) {
+      thinRankCap = visibilityBase.cap
     }
   }
 
-  const renderGraph = (humans: GraveHumanSummary[]): void => {
-    destroyGraph()
-    allHumans = humans
-    refreshInteractiveHumans(thinRankCap)
+  const syncCapFromZoom = (): void => {
+    if (!graph || isSyncingCap || suppressZoomCapSync) return
+    const zoomCap = capFromCurrentZoom()
+    if (visibilityBase.useSegmentInitial && zoomCap <= 1) {
+      if (thinRankCap !== visibilityBase.cap) {
+        thinRankCap = visibilityBase.cap
+        void enforceTimelineVisibility(graph, filteredHumans, currentVisibilityPolicy()).then(
+          () => {
+            refreshInteractiveHumans()
+            updateSubtitle(filteredHumans)
+          }
+        )
+      }
+      return
+    }
+    const newCap = Math.max(zoomCap, visibilityBase.cap)
+    if (newCap !== thinRankCap) {
+      void applyVisibilityPolicy(newCap)
+    }
+  }
 
-    const width = chartEl.clientWidth || 1100
+  const renderGraph = (): void => {
+    destroyGraph()
+    refreshDisplayHumans()
+    thinRankCap = visibilityBase.cap
+    refreshInteractiveHumans()
+
+    const viewportWidth = chartEl.clientWidth || 1100
     const height = chartEl.clientHeight || 560
-    thinRankCap = 1
-    refreshInteractiveHumans(thinRankCap)
-    const graphData = buildTimelineGraph(allHumans, width, height, thinRankCap)
+    const graphData = buildTimelineGraph(filteredHumans, viewportWidth, height, isPersonVisible)
 
     if (graphData.nodes.length === 0) {
-      showStatus('暂无逝世日期数据，请先在数据库中导入人物记录。', true)
+      showStatus(
+        filterBounds
+          ? '所选年代内暂无人物，请调整起始/终止年。'
+          : '暂无逝世日期数据，请先在数据库中导入人物记录。',
+        true
+      )
       return
     }
 
     statusEl.hidden = true
-    updateSubtitle(allHumans, thinRankCap)
+    updateSubtitle(filteredHumans)
 
     graph = new Graph({
       container: chartEl,
-      width,
+      width: viewportWidth,
       height,
-      autoFit: 'view',
+      autoFit: { type: 'view', options: { direction: 'both' } },
       padding: [24, 32, 48, 32],
       animation: false,
       data: {
@@ -417,7 +543,23 @@ export async function mountTimelineView(
           opacity: 0.9
         }
       },
-      behaviors: ['drag-canvas', 'zoom-canvas']
+      behaviors: [
+        'drag-canvas',
+        'zoom-canvas',
+        {
+          type: 'fix-element-size',
+          key: 'timeline-fix-size',
+          enable: true,
+          nodeFilter: (datum) => {
+            const nodeType = (datum.data as { nodeType?: string } | undefined)?.nodeType
+            return nodeType === 'person' || nodeType === 'fork' || nodeType === 'axis'
+          },
+          edgeFilter: (datum) => {
+            const edgeType = (datum.data as { edgeType?: string } | undefined)?.edgeType
+            return edgeType === 'trunk' || edgeType === 'branch' || edgeType === 'year-divider'
+          }
+        }
+      ]
     })
 
     const flushTooltip = (): void => {
@@ -457,23 +599,77 @@ export async function mountTimelineView(
 
     const debouncedCapSync = debounce(syncCapFromZoom, 80)
     const onAfterTransform = (): void => {
-      syncViewportVisuals()
-      debouncedCapSync()
+      if (!suppressZoomCapSync) debouncedCapSync()
     }
     viewportHandler = onAfterTransform
     graph.on(GraphEvent.AFTER_TRANSFORM, viewportHandler)
 
+    suppressZoomCapSync = true
     void graph.render().then(async () => {
       if (!graph) return
       disableAutoFit()
       captureBaselineZoom()
-      applyTimelineScreenSpace(graph)
-      const cap = capFromCurrentZoom()
-      if (cap !== thinRankCap) {
-        await applyThinRankCap(cap)
+      resetCapAtSegmentOverview()
+      thinRankCap = visibilityBase.cap
+      await enforceTimelineVisibility(graph, filteredHumans, currentVisibilityPolicy())
+      refreshInteractiveHumans()
+      updateSubtitle(filteredHumans)
+      if (!visibilityBase.useSegmentInitial) {
+        const zoomCap = capFromCurrentZoom()
+        const newCap = Math.max(zoomCap, visibilityBase.cap)
+        if (newCap !== thinRankCap) {
+          await applyVisibilityPolicy(newCap)
+        }
       }
+      suppressZoomCapSync = false
+    }).catch((error) => {
+      suppressZoomCapSync = false
+      showStatus(error instanceof Error ? error.message : '时间轴渲染失败', true)
     })
   }
+
+  const applyYearFilterFromInputs = (): void => {
+    const startRaw = yearStartEl.value.trim()
+    const endRaw = yearEndEl.value.trim()
+    const startYear = parseYearInput(startRaw)
+    const endYear = parseYearInput(endRaw)
+
+    if (startRaw && startYear == null) {
+      showStatus('起始年请输入四位数字，如 2015', true)
+      return
+    }
+    if (endRaw && endYear == null) {
+      showStatus('终止年请输入四位数字，如 2026', true)
+      return
+    }
+
+    filterBounds = resolveYearBounds({ startYear, endYear })
+    refreshDisplayHumans()
+    updateYearFilterHint()
+    clearSearch()
+    statusEl.hidden = true
+    renderGraph()
+  }
+
+  const resetYearFilter = (): void => {
+    yearStartEl.value = ''
+    yearEndEl.value = ''
+    filterBounds = null
+    refreshDisplayHumans()
+    updateYearFilterHint()
+    clearSearch()
+    statusEl.hidden = true
+    renderGraph()
+  }
+
+  yearApplyBtn.addEventListener('click', applyYearFilterFromInputs)
+  yearResetBtn.addEventListener('click', resetYearFilter)
+  yearStartEl.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') applyYearFilterFromInputs()
+  })
+  yearEndEl.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') applyYearFilterFromInputs()
+  })
 
   try {
     const result = await window.api.graveHuman.list()
@@ -481,10 +677,13 @@ export async function mountTimelineView(
       showStatus(result.error, true)
       return { destroy: destroyGraph, resize: () => undefined }
     }
+    rawHumans = result.data
+    refreshDisplayHumans()
+    updateYearFilterHint()
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
     })
-    renderGraph(result.data)
+    renderGraph()
   } catch (error) {
     showStatus(error instanceof Error ? error.message : '加载数据失败', true)
   }
@@ -492,11 +691,17 @@ export async function mountTimelineView(
   const resizeObserver = new ResizeObserver(() => {
     if (!chartEl.clientWidth || !chartEl.clientHeight || !graph) return
     void (async () => {
-      graph!.resize(chartEl.clientWidth, chartEl.clientHeight)
-      await graph!.fitView()
-      disableAutoFit()
-      captureBaselineZoom()
-      await rebuildTimelineGraph(capFromCurrentZoom())
+      suppressZoomCapSync = true
+      try {
+        graph!.resize(chartEl.clientWidth, chartEl.clientHeight)
+        await fitTimelineViewport(graph!)
+        disableAutoFit()
+        captureBaselineZoom()
+        resetCapAtSegmentOverview()
+        await rebuildTimelineGraph()
+      } finally {
+        suppressZoomCapSync = false
+      }
     })()
   })
   resizeObserver.observe(chartEl)
@@ -511,7 +716,7 @@ export async function mountTimelineView(
     resize: () => {
       if (graph) {
         graph.resize(chartEl.clientWidth, chartEl.clientHeight)
-        void rebuildTimelineGraph(thinRankCap)
+        void rebuildTimelineGraph()
       }
     }
   }

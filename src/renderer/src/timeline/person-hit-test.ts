@@ -9,7 +9,7 @@ export interface PersonHitResult {
 
 /**
  * 用屏幕坐标在可见人物头像中做圆形命中（不依赖 G6 pointerEvents）。
- * 优先 thin_rank 较大者，避免被 rank=1 的大拾取区挡住。
+ * 优先 thin_rank 较小（更重要）者。
  */
 export function hitTestPersonAtClient(
   graph: Graph,
@@ -19,7 +19,7 @@ export function hitTestPersonAtClient(
 ): PersonHitResult | null {
   const [canvasX, canvasY] = graph.getCanvasByClient([clientX, clientY])
 
-  const candidates = [...humans].sort((a, b) => b.thin_rank - a.thin_rank)
+  const candidates = [...humans].sort((a, b) => a.thin_rank - b.thin_rank)
 
   let best: (PersonHitResult & { dist: number }) | null = null
 
