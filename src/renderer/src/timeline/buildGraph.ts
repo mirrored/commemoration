@@ -11,6 +11,7 @@ import {
   personSizeForThinRank,
   zIndexForThinRank
 } from './thin-rank-layout'
+import { computeDividerYearsForVisible } from './year-divider-visibility'
 
 export type TimelineNodeType =
   | 'fork'
@@ -427,21 +428,23 @@ export function buildTimelineGraph(
   const dividerTopY = centerY - branchOuterY - YEAR_DIVIDER_EXTEND
   const dividerBottomY = centerY + branchOuterY + YEAR_DIVIDER_EXTEND
   const yearBoundaries = collectYearBoundaryPositions(valid, forkXs)
+  const dividerYearsToShow = computeDividerYearsForVisible(humans, isPersonVisible)
 
   for (const { year, x } of yearBoundaries) {
+    const showDivider = dividerYearsToShow.has(year)
     const topId = `year-divider-top-${year}`
     const bottomId = `year-divider-bottom-${year}`
 
     nodes.push({
       id: topId,
       data: { nodeType: 'year-divider', yearLabel: `${year}` },
-      style: { ...hiddenAnchorStyle, x, y: dividerTopY }
+      style: { ...hiddenAnchorStyle, x, y: dividerTopY, visibility: showDivider ? 'visible' : 'hidden' }
     })
 
     nodes.push({
       id: bottomId,
       data: { nodeType: 'year-divider' },
-      style: { ...hiddenAnchorStyle, x, y: dividerBottomY }
+      style: { ...hiddenAnchorStyle, x, y: dividerBottomY, visibility: showDivider ? 'visible' : 'hidden' }
     })
 
     nodes.push({
@@ -462,7 +465,9 @@ export function buildTimelineGraph(
         labelBackgroundLineWidth: 1,
         labelBackgroundRadius: 6,
         labelPadding: [3, 8],
-        pointerEvents: 'none' as const
+        pointerEvents: 'none' as const,
+        visibility: showDivider ? 'visible' : 'hidden',
+        label: showDivider
       }
     })
 
@@ -477,7 +482,8 @@ export function buildTimelineGraph(
         lineDash: [10, 7],
         opacity: 1,
         shadowColor: 'rgba(140, 170, 220, 0.35)',
-        shadowBlur: 6
+        shadowBlur: 6,
+        visibility: showDivider ? 'visible' : 'hidden'
       }
     })
   }

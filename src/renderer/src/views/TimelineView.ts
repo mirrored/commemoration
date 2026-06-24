@@ -7,7 +7,7 @@ import { buildTimelineGraph } from '../timeline/buildGraph'
 import { fitTimelineViewport } from '../timeline/screen-space'
 import { hitTestPersonAtClient } from '../timeline/person-hit-test'
 import { createTimelinePersonTooltip, personTooltipText } from '../timeline/person-tooltip'
-import { applyTimelineVisibilityToGraph, enforceTimelineVisibility } from '../timeline/thin-rank-visibility'
+import { enforceTimelineVisibility } from '../timeline/thin-rank-visibility'
 import {
   GRAVE_HUMAN_SEARCH_FIELDS,
   formatSearchDate,
@@ -202,6 +202,7 @@ export async function mountTimelineView(
   let viewportHandler: (() => void) | null = null
   let isSyncingCap = false
   let suppressZoomCapSync = false
+  let lastVisibilitySyncKey = ''
   let personTooltip = createTimelinePersonTooltip()
   let chartPointerMove: ((e: MouseEvent) => void) | null = null
   let chartPointerLeave: (() => void) | null = null
@@ -225,14 +226,6 @@ export async function mountTimelineView(
     segmentOverview:
       visibilityBase.useSegmentInitial &&
       (!graph || capFromCurrentZoom() <= 1)
-  })
-
-  const previousVisibilityPolicy = (previousCap: number): TimelineVisibilityPolicy => ({
-    cap: previousCap,
-    segmentSampleIds: visibilityBase.segmentSampleIds,
-    useSegmentInitial: visibilityBase.useSegmentInitial,
-    sampleSeed: visibilityBase.sampleSeed,
-    segmentOverview: currentVisibilityPolicy().segmentOverview
   })
 
   const isPersonVisible = (human: GraveHumanSummary): boolean =>
@@ -433,6 +426,7 @@ export async function mountTimelineView(
       suppressZoomCapSync = false
     }
     await enforceTimelineVisibility(graph, filteredHumans, currentVisibilityPolicy())
+    lastVisibilitySyncKey = visibilitySyncKey()
     refreshInteractiveHumans()
     updateSubtitle(filteredHumans)
   }
@@ -444,20 +438,41 @@ export async function mountTimelineView(
   const applyVisibilityPolicy = async (newCap: number): Promise<void> => {
     if (!graph || filteredHumans.length === 0 || newCap === thinRankCap) return
     isSyncingCap = true
-    const previousCap = thinRankCap
     try {
       thinRankCap = newCap
-      await applyTimelineVisibilityToGraph(
+      lastVisibilitySyncKey = ''
+      await enforceTimelineVisibility(
         graph,
         filteredHumans,
-        currentVisibilityPolicy(),
-        previousVisibilityPolicy(previousCap)
+        currentVisibilityPolicy()
       )
+      lastVisibilitySyncKey = visibilitySyncKey()
       refreshInteractiveHumans()
       updateSubtitle(filteredHumans)
     } finally {
       isSyncingCap = false
     }
+  }
+
+  const visibilitySyncKey = (): string => {
+    const policy = currentVisibilityPolicy()
+    return `${policy.cap}|${policy.segmentOverview}|${policy.useSegmentInitial}`
+  }
+
+  const syncVisibilityFromZoom = (): void => {
+    if (!graph || isSyncingCap || suppressZoomCapSync) return
+    const syncKey = visibilitySyncKey()
+    if (syncKey === lastVisibilitySyncKey) return
+    lastVisibilitySyncKey = syncKey
+    void enforceTimelineVisibility(
+      graph,
+      filteredHumans,
+      currentVisibilityPolicy()
+    ).then(() => {
+      lastVisibilitySyncKey = visibilitySyncKey()
+      refreshInteractiveHumans()
+      updateSubtitle(filteredHumans)
+    })
   }
 
   const resetCapAtSegmentOverview = (): void => {
@@ -470,18 +485,13 @@ export async function mountTimelineView(
   const syncCapFromZoom = (): void => {
     if (!graph || isSyncingCap || suppressZoomCapSync) return
     const zoomCap = capFromCurrentZoom()
+
     if (visibilityBase.useSegmentInitial && zoomCap <= 1) {
-      if (thinRankCap !== visibilityBase.cap) {
-        thinRankCap = visibilityBase.cap
-        void enforceTimelineVisibility(graph, filteredHumans, currentVisibilityPolicy()).then(
-          () => {
-            refreshInteractiveHumans()
-            updateSubtitle(filteredHumans)
-          }
-        )
-      }
+      thinRankCap = visibilityBase.cap
+      syncVisibilityFromZoom()
       return
     }
+
     const newCap = Math.max(zoomCap, visibilityBase.cap)
     if (newCap !== thinRankCap) {
       void applyVisibilityPolicy(newCap)
@@ -612,6 +622,7 @@ export async function mountTimelineView(
       resetCapAtSegmentOverview()
       thinRankCap = visibilityBase.cap
       await enforceTimelineVisibility(graph, filteredHumans, currentVisibilityPolicy())
+      lastVisibilitySyncKey = visibilitySyncKey()
       refreshInteractiveHumans()
       updateSubtitle(filteredHumans)
       if (!visibilityBase.useSegmentInitial) {
