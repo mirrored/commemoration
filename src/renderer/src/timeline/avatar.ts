@@ -1,3 +1,8 @@
+import {
+  LOCAL_AVATAR_PROTOCOL,
+  localAvatarProtocolUrl,
+  parseLocalAvatarRelativePath
+} from '../../../shared/local-avatar'
 import { genderBranchColors } from './colors'
 
 /**
@@ -5,17 +10,23 @@ import { genderBranchColors } from './colors'
  * 支持：
  * - https:// / http:// 直链图片（JPEG/JPG/PNG/GIF/WebP/SVG 等，由浏览器按 Content-Type 解码）
  * - data:image/...;base64,... 等 Data URL
+ * - local:avatars/… 本地资源（映射到 server/data/avatars/，经 commemorate:// 协议加载）
  * - Wikimedia Commons：…/wiki/Special:FilePath/文件名（会 302 到 upload.wikimedia.org）
- * 不支持：本地相对路径、file://（需自行转为 http(s) 或 data URL）
  */
 export function resolveAvatarSrc(avatar: string | null | undefined): string | null {
   if (!avatar?.trim()) return null
   const value = avatar.trim()
   if (value.startsWith('data:')) return value
+  const localRelative = parseLocalAvatarRelativePath(value)
+  if (localRelative) return localAvatarProtocolUrl(localRelative)
   if (value.startsWith('http://') || value.startsWith('https://')) {
     return value
   }
   return null
+}
+
+export function isLocalAvatarSrc(src: string | null | undefined): boolean {
+  return src?.startsWith(LOCAL_AVATAR_PROTOCOL) ?? false
 }
 
 export function hasExternalAvatar(avatar: string | null | undefined): boolean {
@@ -42,12 +53,14 @@ export function avatarSrcForPerson(
   return resolveAvatarSrc(avatar) ?? createInitialsAvatarDataUrl(name, gender)
 }
 
-/** 时间轴节点：仅用本地 SVG，避免 Electron 拉取外链头像时反复 SSL 报错 */
+/** 时间轴节点：本地头像可用；外链仍用首字 SVG，避免 Electron 拉取外链时 SSL 报错 */
 export function avatarSrcForTimeline(
   name: string,
   gender: string,
-  _avatar: string | null | undefined,
+  avatar: string | null | undefined,
   size = 72
 ): string {
+  const resolved = resolveAvatarSrc(avatar)
+  if (resolved && isLocalAvatarSrc(resolved)) return resolved
   return createInitialsAvatarDataUrl(name, gender, size)
 }

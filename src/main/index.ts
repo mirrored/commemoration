@@ -10,6 +10,9 @@ import {
   AuthError
 } from './auth'
 import { getGraveHuman, listGraveHumans } from './grave-human'
+import { registerAvatarProtocolHandler, registerAvatarProtocolSchemes } from './avatar-protocol'
+
+registerAvatarProtocolSchemes()
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -102,6 +105,7 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  registerAvatarProtocolHandler()
   registerIpcHandlers()
   createWindow()
 

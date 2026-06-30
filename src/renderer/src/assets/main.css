@@ -544,8 +544,8 @@ button.secondary:hover:not(:disabled) {
 
 .notable-works-item {
   display: grid;
-  grid-template-columns: 3.25rem 1fr;
-  gap: 0.65rem;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.75rem;
   align-items: baseline;
   padding: 0.45rem 0.5rem;
   border-radius: 8px;
@@ -554,18 +554,26 @@ button.secondary:hover:not(:disabled) {
 }
 
 .notable-works-year {
+  flex-shrink: 0;
   font-variant-numeric: tabular-nums;
   font-size: 0.82rem;
   font-weight: 600;
   color: #7dd3fc;
   letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
 .notable-works-year--unknown {
   color: #6b7280;
 }
 
+.notable-works-year--label {
+  color: #a5b4c8;
+  font-weight: 500;
+}
+
 .notable-works-title {
+  min-width: 0;
   color: #e8ecf3;
   line-height: 1.55;
 }

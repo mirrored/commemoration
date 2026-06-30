@@ -2,6 +2,11 @@ appId: com.commemorate.app
 productName: Commemorate
 directories:
   buildResources: resources
+extraResources:
+  - from: ../server/data/avatars
+    to: avatars
+    filter:
+      - '**/*'
 files:
   - '!**/.vscode/*'
   - '!src/*'
